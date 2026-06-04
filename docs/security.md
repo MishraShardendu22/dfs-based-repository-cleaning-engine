@@ -2,7 +2,7 @@
 
 ## Overview
 
-GitHub-Cleaner-Go performs privileged operations across multiple security domains: GitHub API access, SSH-based repository cloning, filesystem mutation, arbitrary package installation, and automated Git operations. Each domain introduces specific security considerations that operators must understand before deployment.
+GitHub-Cleaner-Go performs privileged operations across multiple security domains: GitHub API access, SSH-based repository cloning, filesystem mutation, arbitrary package installation, automated Git operations, and Prometheus metrics exposure. Each domain introduces specific security considerations that operators must understand before deployment.
 
 ---
 
@@ -14,7 +14,7 @@ Repository cloning uses SSH URLs:
 
 ```go
 repoURL := "git@github.com:MishraShardendu22/" + repo + ".git"
-cmd := exec.Command("git", "clone", repoURL)
+cmd := exec.Command("git", "clone", repoURL, repoPath)
 ```
 
 The tool inherits the SSH credentials of the executing user. It relies on an active SSH agent with registered keys.
@@ -46,7 +46,7 @@ The tool inherits the SSH credentials of the executing user. It relies on an act
 Git is executed as a subprocess for cloning and committing:
 
 ```go
-exec.Command("git", "clone", repoURL)
+exec.Command("git", "clone", repoURL, repoPath)
 exec.Command("sh", "-c", "git cm 'auto: cleanup ui and build'")
 ```
 
@@ -70,7 +70,7 @@ repoURL := "git@github.com:MishraShardendu22/" + repo + ".git"
 If a repository name contained shell special characters or path traversal sequences, the behavior would be:
 
 - `git clone` receives the name as an argument (not shell-interpreted), so injection is limited
-- `os.Chdir(repo)` and `os.RemoveAll(repo)` use the name directly — path traversal (`../../etc`) could escape the working directory
+- `os.RemoveAll(absRepoPath)` uses an absolute path — path traversal is mitigated
 
 **Mitigations**:
 - Validate repository names against a strict pattern (`^[A-Za-z0-9_.-]+$`)
@@ -161,9 +161,37 @@ os.RemoveAll(path)
 
 ### Mitigations
 
-- The tool currently operates only within cloned repositories, limiting scope
+- The tool currently operates only within cloned repositories (`_Repos/`), limiting scope
 - `os.RemoveAll` is bounded by the repository's directory structure
 - No symlink following — dangerous if a symlink in `components/ui` points outside the repo
+
+---
+
+## Domain 6: Prometheus Metrics Exposure
+
+### Mechanism
+
+```go
+http.Handle("/metrics", promhttp.Handler())
+slog.Info("metrics server starting on :2112")
+if err := http.ListenAndServe(":2112", nil); err != nil {
+    slog.Error("metrics server failed", "error", err)
+}
+```
+
+### Risks
+
+| Risk | Severity | Description |
+|---|---|---|
+| Information disclosure | Low | Metrics endpoint exposes repository count, processing durations, and failure counters |
+| Unauthenticated endpoint | Medium | The `/metrics` endpoint is open to any client that can reach port 2112 |
+| Debug information | Low | Metric labels may reveal repository names or processing characteristics |
+
+### Mitigations
+
+- Bind to localhost only if remote access is not needed (currently binds to all interfaces)
+- Use a reverse proxy with authentication for production deployments
+- Restrict network access to port 2112 via firewall rules
 
 ---
 
@@ -215,7 +243,7 @@ RUN apk add --no-cache git openssh curl npm
 
 COPY . /app
 WORKDIR /app
-RUN go build -o /usr/local/bin/github-cleaner main.go Language.go
+RUN go build -o /usr/local/bin/github-cleaner .
 
 # Create non-root user
 RUN adduser -D cleaner
@@ -254,3 +282,4 @@ unshare --user --map-root-user --mount-proc --fork --pid \
 - [ ] Have a backup strategy for affected repositories
 - [ ] Monitor disk space during execution
 - [ ] Check for symlinks in `components/ui` directories
+- [ ] Secure Prometheus metrics endpoint (port 2112)

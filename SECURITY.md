@@ -5,7 +5,6 @@
 | Version | Supported |
 |---|---|
 | Current (HEAD) | ✅ Active development |
-| Prior releases | ❌ Not supported |
 
 Security updates are applied to the latest commit on the `main` branch. There are no versioned releases at this time.
 
@@ -101,7 +100,7 @@ export npm_config_ignore_scripts=true  # If build validation not needed
 
 ### After Execution
 
-- Verify that no orphaned clones remain on disk
+- Verify that no orphaned clones remain on disk (`_Repos/` directory)
 - Review Git commit history for unexpected changes
 - Check for deleted files that should have been preserved
 
@@ -122,9 +121,9 @@ export npm_config_ignore_scripts=true  # If build validation not needed
 
 ## Dependency Security
 
-### Go Standard Library
+### Go Standard Library + Prometheus
 
-The tool uses only Go standard library packages. There are no third-party Go dependencies. This eliminates supply chain risk from Go module dependencies.
+The tool uses Go standard library packages and `prometheus/client_golang`. This minimizes supply chain risk from Go module dependencies.
 
 ### External Tool Dependencies
 
@@ -134,7 +133,6 @@ The tool uses only Go standard library packages. There are no third-party Go dep
 | `ssh` | System package | Standard |
 | `npm` | Node.js distribution | High (executes arbitrary code) |
 | `node` | Node.js distribution | Medium (runtime only) |
-| `curl` | System package | Low (used only by Language.go) |
 
 ### npm Dependency Chain
 

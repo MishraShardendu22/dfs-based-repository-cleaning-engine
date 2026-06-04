@@ -124,11 +124,13 @@ func CloneAndClean(repo string) {
 	Cleaner(absRepoPath, repo, repoStart)
 }
 
+// Basically a middle function to initiate timers and improve logging
 func Cleaner(staringRepo string, repo string, repoStart time.Time) {
 	logger.Info("cleaner_start",
 		slog.String("repo", repo),
 		slog.String("path", staringRepo),
 	)
+
 	util.LogCleanupStart(logger, repo)
 	cleanupStart := time.Now()
 
@@ -143,6 +145,7 @@ func Cleaner(staringRepo string, repo string, repoStart time.Time) {
 
 // DFS call to clean the directory recursively
 func DeepSearchAndClean(currFolder string, repo string, repoStart time.Time) {
+	// note all the files and folders basically 
 	dirs := util.Segregator(currFolder, true)
 	files := util.Segregator(currFolder, false)
 
@@ -178,22 +181,32 @@ func CleanThis(filesAndFolder string, repo string, repoStart time.Time) {
 	exts := map[string]bool{".ts": true, ".tsx": true, ".js": true, ".jsx": true}
 
 	filepath.WalkDir(filesAndFolder, func(path string, d os.DirEntry, err error) error {
+
+		// if the path has error or is a directory skip
 		if err != nil || d.IsDir() {
 			return nil
 		}
+
+		// binary / no extension file skipped
 		if !exts[filepath.Ext(path)] {
 			return nil
 		}
+
+		// read the ts, tsx, js, jsx file
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return nil
 		}
+		
+		// mark all the used components as true
 		for _, m := range regexp.MustCompile(`[./@"]components/ui/([A-Za-z0-9_-]+)`).FindAllStringSubmatch(string(data), -1) {
 			used[strings.ToLower(m[1])] = true
 		}
+
 		return nil
 	})
 
+	
 	entries, err := os.ReadDir(uiDir)
 	if err != nil {
 		logger.Error("failed_read_ui_dir",

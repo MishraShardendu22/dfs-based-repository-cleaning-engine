@@ -7,8 +7,8 @@ GitHub-Cleaner-Go operates as an **autonomous repository maintenance agent**. Un
 The system does not maintain state between executions. Each run is an atomic operation that:
 
 1. Discovers repositories from GitHub
-2. Processes each repository independently
-3. Destroys all local state upon completion
+2. Processes up to 5 repositories concurrently via a goroutine pool
+3. Destroys all local state (cloned repos in `_Repos/`) upon completion
 
 ## Cleanup Pipeline (Detailed)
 
@@ -24,86 +24,113 @@ Response: [{ name: "repo-1" }, { name: "repo-2" }, ...]
 Extracted: ["repo-1", "repo-2", ...]
 ```
 
-The GitHub API is queried without authentication. This imposes a rate limit of 60 requests per hour for unauthenticated requests. Each execution consumes 1 + N requests where N is the number of repositories (if using Language.go).
+The GitHub API is queried without authentication. This imposes a rate limit of 60 requests per hour for unauthenticated requests.
 
-### Phase 2: Clone & Context Switch
+### Phase 2: Concurrent Worker Dispatch
 
 ```
 For each repo name:
-  │
-  ├── Construct SSH URL: git@github.com:{user}/{repo}.git
-  ├── Execute: git clone {url}
-  ├── os.Chdir(repo)
-  ├── Run: Cleaner()
-  └── Defer: os.Chdir("..") + os.RemoveAll(repo)
+   │
+   ├── wg.Add(1)
+   ├── go func(repo) {
+   │     limit <- struct{}{}          // Acquire semaphore slot
+   │     defer func() { <-limit }()    // Release slot
+   │     defer wg.Done()
+   │     
+   │     util.MetricsRegistry.ActiveWorkers.Inc()
+   │     defer util.MetricsRegistry.ActiveWorkers.Dec()
+   │     
+   │     CloneAndClean(repo)
+   │   }(repo)
+   │
+wg.Wait()   // Wait for all workers to complete
 ```
 
-The working directory is changed to the cloned repository root. This is critical because all subsequent filesystem operations are relative to the current working directory. Deferred cleanup ensures no orphaned clones remain on disk regardless of execution path.
+A buffered channel of capacity 5 acts as a semaphore, ensuring no more than 5 goroutines run simultaneously.
 
-### Phase 3: Recursive Project Discovery
+### Phase 3: Clone & Cleanup
 
 ```
-DeepSearchAndClean("/repo-root")
-  │
-  ├── List files → ["package.json", "src/", ...]
-  ├── Contains(files, "package.json")?
-  │   ├── Yes → CleanThis(folder) ← React project found
-  │   └── No  → Recurse into each subdirectory
-  │               │
-  │               └── DeepSearchAndClean("/repo-root/src")
-  │                     ├── List files → ["App.tsx", ...]
-  │                     └── No package.json → recurse...
+CloneAndClean(repo):
+   │
+   ├── Construct SSH URL: git@github.com:{user}/{repo}.git
+   ├── Execute: git clone {url} _Repos/{repo}
+   ├── On failure: log error, increment metric, return
+   ├── Resolve absolute path: filepath.Abs("_Repos/{repo}")
+   ├── Run: Cleaner(absRepoPath, repo, repoStart)
+   └── Defer: os.RemoveAll(absRepoPath)
+```
+
+The working directory is never changed — all operations use absolute paths, enabling safe concurrent processing.
+
+### Phase 4: Recursive Project Discovery
+
+```
+Cleaner(absRepoPath, repo, repoStart):
+  └── DeepSearchAndClean(absRepoPath, repo, repoStart)
+
+DeepSearchAndClean("/repo-root", repo, repoStart):
+   │
+   ├── Segregator(currFolder, false) → files
+   ├── Segregator(currFolder, true)  → directories
+   ├── Contains(files, "package.json")?
+   │   ├── Yes → CleanThis(folder, repo, repoStart) ← React project found
+   │   └── No  → Recurse into each subdirectory
+   │               │
+   │               └── DeepSearchAndClean("/repo-root/src", repo, repoStart)
+   │                     ├── List files → ["App.tsx", ...]
+   │                     └── No package.json → recurse...
 ```
 
 This recursion terminates at two points:
 1. A directory containing `package.json` — triggers the cleanup pipeline
 2. A directory with no subdirectories — leaf node, nothing to process
 
-### Phase 4: React Detection
+### Phase 5: React Detection
 
 ```
 Read file: package.json
-  │
-  ├── strings.Contains(raw, "react")?
-  │   ├── Yes → Continue
-  │   └── No  → Return (not a React project)
-  │
-  ├── strings.Contains(raw, "react-dom")?
-  │   ├── Yes → React project confirmed
-  │   └── No  → Return (not a React project)
+   │
+   ├── strings.Contains(raw, "react")?
+   │   ├── Yes → Continue
+   │   └── No  → Return (not a React project)
+   │
+   ├── strings.Contains(raw, "react-dom")?
+   │   ├── Yes → React project confirmed
+   │   └── No  → Return (not a React project)
 ```
 
 The detection is intentionally permissive — it performs substring matching on the raw file content rather than structured JSON parsing of `dependencies` or `devDependencies`. This means comments or package-lock remnants containing "react" could produce false positives.
 
-### Phase 5: UI Directory Discovery
+### Phase 6: UI Directory Discovery
 
 ```
-filepath.WalkDir(root)
-  │
-  └── For each directory entry:
-        ├── d.IsDir()?
-        ├── filepath.Base(path) == "ui"?
-        └── filepath.Base(filepath.Dir(path)) == "components"?
-              │
-              ├── All true → Return path: /root/src/components/ui
-              └── Any false → Continue walking
+FindUIDir(root)
+   │
+   └── For each directory entry:
+         ├── d.IsDir()?
+         ├── filepath.Base(path) == "ui"?
+         └── filepath.Base(filepath.Dir(path)) == "components"?
+               │
+               ├── All true → Return path: /root/src/components/ui
+               └── Any false → Continue walking
 ```
 
 The walker scans every directory in the tree. The first (and only the first) `components/ui` match is used.
 
-### Phase 6: Source Graph Analysis
+### Phase 7: Source Graph Analysis
 
 ```
 For each file in root (recursive):
-  │
-  ├── Extension in [.ts, .tsx, .js, .jsx]?
-  │   ├── Yes → Read file content
-  │   └── No  → Skip
-  │
-  ├── Apply regex: [./@"]components/ui/([A-Za-z0-9_-]+)
-  │
-  └── For each match:
-        └── used[strings.ToLower(match)] = true
+   │
+   ├── Extension in [.ts, .tsx, .js, .jsx]?
+   │   ├── Yes → Read file content
+   │   └── No  → Skip
+   │
+   ├── Apply regex: [./@"]components/ui/([A-Za-z0-9_-]+)
+   │
+   └── For each match:
+         └── used[strings.ToLower(match)] = true
 ```
 
 The regex captures the component name after the `components/ui/` prefix. The pattern supports:
@@ -115,53 +142,83 @@ The regex captures the component name after the `components/ui/` prefix. The pat
 | `"` | `"components/ui/Modal"` | Bare specifier imports |
 | None | `components/ui/Button` | Direct references |
 
-### Phase 7: Dead Component Elimination
+### Phase 8: Dead Component Elimination
 
 ```
 For each entry in components/ui/:
-  │
-  ├── Extract name without extension: "Button.tsx" → "Button"
-  ├── Lowercase: "Button" → "button"
-  │
-  ├── used["button"] == true?
-  │   ├── No  → os.RemoveAll(entry) → DELETED
-  │   └── Yes → Keep
+   │
+   ├── Extract name without extension: "Button.tsx" → "Button"
+   ├── Lowercase: "Button" → "button"
+   │
+   ├── used["button"] == true?
+   │   ├── No  → os.RemoveAll(entry) → DELETED
+   │   └── Yes → Keep
+   │
+   └── FilesDeletedTotal.Add(deletedCount)  ← Prometheus metric
 ```
 
 Components are deleted using `os.RemoveAll`, which handles both files and directories. This means component subdirectories (e.g., `Button/index.tsx`) are also removed.
 
-### Phase 8: Build Verification
+### Phase 9: Build Verification
 
 ```
-exec.Command("sh", "-c", "npm install --legacy-peer-deps && npm run build")
-  │
-  ├── npm install → Resolves and installs dependencies
-  ├── npm run build → Executes production build script
-  └── Exit code is NOT checked (failures are silent)
+LogBuildStart(logger, repo)
+build := exec.Command("sh", "-c", "npm install --legacy-peer-deps && npm run build")
+build.Dir = filesAndFolder
+build.Stdout = os.Stdout
+build.Stderr = os.Stderr
+buildErr := build.Run()
+
+buildStatus := "success"
+if buildErr != nil {
+    buildStatus = "failed"
+    MetricsRegistry.BuildFailuresTotal.Inc()
+}
+LogBuildEnd(logger, repo, buildDur, buildStatus, buildErr)
+MetricsRegistry.BuildDurationSeconds.Observe(buildDur.Seconds())
 ```
 
-Build output is piped to stdout/stderr for visibility, but build failures do not halt the pipeline or revert the deletions.
+Build output is piped to stdout/stderr for visibility. Build errors are captured, logged, and metered, but build failures do not halt the pipeline or revert the deletions.
 
-### Phase 9: Git Automation
+### Phase 10: Git Automation
 
 ```
-exec.Command("sh", "-c", "git cm 'auto: cleanup ui and build'")
-  │
-  └── Assumes 'cm' is a Git alias for 'commit -am'
+LogGitCommitStart(logger, repo)
+git := exec.Command("sh", "-c", "git cm 'auto: cleanup ui and build'")
+git.Dir = filesAndFolder
+git.Stdout = os.Stdout
+git.Stderr = os.Stderr
+gitErr := git.Run()
+
+if gitErr != nil {
+    LogGitCommitEnd(logger, repo, gitDur, gitErr)
+    MetricsRegistry.GitCommitFailuresTotal.Inc()
+} else {
+    LogGitCommitEnd(logger, repo, gitDur, nil)
+}
 ```
 
-This stages all changes and commits them. The `-a` flag automatically stages all modified and deleted files. No push is performed — changes remain local.
+This stages all changes and commits them. The `-a` flag automatically stages all modified and deleted files. No push is performed — changes remain local. Git errors are logged and metered.
 
-### Phase 10: Repository Cleanup
+### Phase 11: Repository Cleanup
 
 ```
 defer func() {
-    os.Chdir("..")        // Return to parent directory
-    os.RemoveAll(repo)    // Delete cloned repository
+    os.RemoveAll(absRepoPath)    // Delete cloned repository
 }()
 ```
 
-Executed when `Clone()` returns, regardless of success or failure of the cleanup pipeline.
+Executed when `CloneAndClean()` returns, regardless of success or failure of the cleanup pipeline.
+
+### Phase 12: Execution Summary
+
+```
+logger.Info("execution_summary",
+    slog.Int("total_repos", totalRepos),
+)
+```
+
+After all workers complete, a summary log entry is emitted with the total number of repositories processed.
 
 ## Mermaid: Complete System Workflow
 
@@ -173,8 +230,8 @@ flowchart LR
 
     subgraph Orchestration
         B[API Discovery]
-        C[SSH Clone]
-        D[Context Switch]
+        C[Concurrent Worker Pool]
+        D[SSH Clone]
     end
 
     subgraph Analysis
@@ -226,7 +283,7 @@ flowchart TD
 ```mermaid
 flowchart TD
     subgraph "Recursive Traversal (DeepSearchAndClean)"
-        ENTER[Enter Directory] --> LIST[List Files & Dirs]
+        ENTER[Enter Directory] --> LIST[Segregator: Files & Dirs]
         LIST --> CHECK{Has package.json?}
         CHECK -->|Yes| CLEAN[Enter CleanThis Pipeline]
         CHECK -->|No| RECURSE[For Each Subdirectory]
@@ -244,7 +301,7 @@ flowchart TD
 flowchart TD
     subgraph "Import Resolution & Dead Component Detection"
         UI[components/ui/ Directory] --> LIST_UI[List All Entries]
-        
+
         subgraph SourceScan[Source File Scan]
             SRC[Source Files .ts/.tsx/.js/.jsx] --> READ[Read Content]
             READ --> REGEX[Apply Import Regex]

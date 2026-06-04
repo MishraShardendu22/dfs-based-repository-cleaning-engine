@@ -7,11 +7,22 @@ Build validation is the **regression detection mechanism** within the cleanup pi
 ## Implementation
 
 ```go
+util.LogBuildStart(logger, repo)
+buildStart := time.Now()
 build := exec.Command("sh", "-c", "npm install --legacy-peer-deps && npm run build")
-build.Dir = folder
+build.Dir = filesAndFolder
 build.Stdout = os.Stdout
 build.Stderr = os.Stderr
-build.Run()
+buildErr := build.Run()
+buildDur := time.Since(buildStart)
+
+buildStatus := "success"
+if buildErr != nil {
+    buildStatus = "failed"
+    util.MetricsRegistry.BuildFailuresTotal.Inc()
+}
+util.LogBuildEnd(logger, repo, buildDur, buildStatus, buildErr)
+util.MetricsRegistry.BuildDurationSeconds.Observe(buildDur.Seconds())
 ```
 
 The build validation executes two chained commands via a shell:
@@ -91,23 +102,30 @@ Failed to compile.
 Module not found: Can't resolve './components/ui/DeletedButton'
 ```
 
-**Current behavior**: The build error is logged but ignored. The Git commit proceeds regardless, creating a commit that introduces a build failure.
+**Current behavior**: The build error is captured in `buildErr`. The status is logged via structured logging (`build_status: "failed"`, `duration`, `error`), the `BuildFailuresTotal` Prometheus counter is incremented, and the pipeline continues to the Git commit step regardless. This means a failed build does not prevent the commit from being created.
+
+## Current Improvement Status
+
+The build validation implementation has been improved from earlier versions:
+
+| Aspect | Earlier | Current |
+|---|---|---|
+| Error capture | Discarded (`build.Run()` return unchecked) | Captured in `buildErr` |
+| Logging | None for build failures | Structured JSON with status, duration, error |
+| Metrics | None | `BuildFailuresTotal` counter, `BuildDurationSeconds` histogram |
+| Pipeline blocking | No | No (still non-blocking) |
+| Rollback | No | No |
+
+While the error is now tracked and observable, build failures still do not prevent the commit — this is a known design limitation.
 
 ## Architectural Weaknesses
 
 ### Non-Blocking Failure Mode
 
-The most significant architectural issue is that `build.Run()` return value is discarded:
-
-```go
-build.Run()  // error not captured
-```
-
-This means:
+The most significant architectural issue is that build failures do not roll back deletions or halt the pipeline:
 - Build failures do not roll back deletions
 - Build failures do not halt the pipeline
-- Build failures do not trigger any alerting
-- The Git commit includes broken code
+- The Git commit includes broken code if the build fails
 
 ### No Pre-Build Validation
 
@@ -183,4 +201,4 @@ func (t *CleanupTransaction) Rollback() {
 
 ## Current Status
 
-Build validation is implemented but **non-functional as a safety mechanism** due to the discarded error return. The build output provides observability but does not influence pipeline behavior.
+Build validation captures and logs errors, tracks them via Prometheus metrics, but is still **non-functional as a safety mechanism** due to the non-blocking pipeline design. The build output provides observability but does not influence pipeline behavior.

@@ -20,6 +20,7 @@
 - Git 2.x+
 - SSH key configured for GitHub access
 - npm/Node.js (for build validation testing)
+- Docker (optional, for Prometheus/Grafana monitoring stack)
 
 ### Fork & Clone
 
@@ -33,7 +34,7 @@ git remote add upstream git@github.com:MishraShardendu22/GitHub-Cleaner-Go.git
 ### Verify Setup
 
 ```bash
-go build -o /dev/null main.go Language.go
+go build ./...
 ```
 
 The build should complete without errors. If you encounter dependency issues, ensure your Go version is 1.24.4+.
@@ -85,7 +86,7 @@ mkdir -p /tmp/cleanup-test && cd /tmp/cleanup-test
 go mod init test-cleanup
 
 # Link or copy the source files
-cp /path/to/GitHub-Cleaner-Go/*.go .
+cp /path/to/GitHub-Cleaner-Go/**/*.go .
 
 # Modify the username to a test GitHub account
 # or use a mock repository list
@@ -213,10 +214,10 @@ Closes #[issue_number]
 
 | Scope | Description |
 |---|---|
-| `engine` | Cleanup engine (`CleanThis`, `findUIDir`) |
-| `scanner` | Repository scanner (`Clone`, `DeepSearchAndClean`) |
+| `engine` | Cleanup engine (`CleanThis`, `FindUIDir`) |
+| `scanner` | Repository scanner (`CloneAndClean`, `DeepSearchAndClean`, `GetAllRepos`) |
 | `build` | Build validation |
-| `lang` | Language statistics module |
+| `metrics` | Prometheus metrics and monitoring |
 | `docs` | Documentation |
 | `config` | Configuration |
 | `*` | Multiple or global changes |
@@ -265,11 +266,13 @@ The project currently has **no automated test suite**. Manual testing is the sta
 - [ ] React project with `components/ui` is correctly identified
 - [ ] Used components are preserved
 - [ ] Unused components are deleted
-- [ ] Build validation executes (even if non-blocking)
+- [ ] Build validation executes and errors are captured
 - [ ] Git commit is created
 - [ ] Repository clone is cleaned up after processing
 - [ ] Non-React projects are skipped
 - [ ] Directories without `package.json` are traversed correctly
+- [ ] Prometheus metrics endpoint is accessible
+- [ ] Concurrent processing does not cause race conditions
 
 ### Testing Contributions
 
@@ -282,7 +285,7 @@ When contributing code, you are expected to:
 
 Contributions toward an automated test suite are welcome. The ideal test infrastructure would include:
 
-- **Unit tests**: Test individual functions (`findUIDir`, `Contains`, `Folder`)
+- **Unit tests**: Test individual functions (`FindUIDir`, `Contains`, `Segregator`)
 - **Integration tests**: Test the full cleanup pipeline against a mock repository
 - **Golden file tests**: Compare console output against expected output
 

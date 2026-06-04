@@ -11,12 +11,13 @@ GitHub-Cleaner-Go is designed to evolve from a focused single-user cleanup tool 
 Focus: Production readiness, safety, and reliability.
 
 - [ ] **Dry-Run Mode** — Implement `--dry-run` flag that reports planned deletions without executing
-- [ ] **Blocking Build Validation** — Check build exit code; skip commit on failure; log structured error data
+- [x] **Structured Build Validation** — Build exit code captured, logged, and metered via Prometheus
+- [ ] **Blocking Build Validation** — Skip commit on build failure; rollback deletions
 - [ ] **Pre-Build Baseline** — Run build before deletions to establish a known-good state
-- [ ] **Error Handling Audit** — Replace silent error handling with structured logging and graceful degradation
+- [ ] **Error Handling Audit** — Replace remaining silent error handling (`Segregator`, `WalkDir` callbacks) with structured logging
 - [ ] **Repository Name Validation** — Sanitize repository names against `^[A-Za-z0-9_.-]+$` pattern
 - [ ] **Remove Git Alias Dependency** — Use `git commit -am` directly instead of `git cm`
-- [ ] **Configuration Externalization** — Move hardcoded values (username, extensions, regex, npm flags) to config file or CLI flags
+- [ ] **Configuration Externalization** — Move hardcoded values (username, extensions, regex, npm flags, concurrency limit) to config file or CLI flags
 - [ ] **GitHub Token Support** — Add HTTP authentication for higher API rate limits and private repository access
 - [ ] **API Pagination** — Implement multi-page repository fetching for accounts with 100+ repos
 - [ ] **Directory Exclusion** — Skip `.git`, `node_modules`, `.next`, `build`, `dist` during traversal

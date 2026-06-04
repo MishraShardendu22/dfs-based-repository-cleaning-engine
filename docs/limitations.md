@@ -51,7 +51,7 @@ However, on case-sensitive filesystems (Linux), deleting `button.tsx` when the i
 
 ### 3. Single UI Directory Assumption
 
-`findUIDir()` returns the first `components/ui` match and short-circuits:
+`FindUIDir()` returns the first `components/ui` match and short-circuits:
 
 ```go
 if filepath.Base(filepath.Dir(path)) == "components" {
@@ -88,16 +88,21 @@ The tool has no preview capability. Every execution performs destructive operati
 ### 6. Build Validation Is Non-Blocking
 
 ```go
-build.Run()  // return value discarded
+buildErr := build.Run()
+
+buildStatus := "success"
+if buildErr != nil {
+    buildStatus = "failed"
+    util.MetricsRegistry.BuildFailuresTotal.Inc()
+}
 ```
 
 Build failures do not:
 - Halt processing for the current repository
 - Revert deletions
 - Prevent the git commit
-- Log structured error information
 
-This makes build validation an **observability feature** rather than a **safety mechanism**.
+Build errors are captured, logged, and metered, but the pipeline continues regardless. This makes build validation an **observability feature** rather than a **safety mechanism**.
 
 ### 7. Git Alias Dependency
 
@@ -107,7 +112,7 @@ The commit command assumes a user-configured Git alias:
 exec.Command("sh", "-c", "git cm 'auto: cleanup ui and build'")
 ```
 
-If the `cm` alias is not configured, the command fails silently and no commit is created. The standard command would be `git commit -am`.
+If the `cm` alias is not configured, the command fails silently and no commit is created. The standard command would be `git commit -am`. The error is captured in `GitCommitFailuresTotal` metric.
 
 ### 8. No Pagination Support
 
@@ -128,22 +133,30 @@ resp, err := http.Get(url)
 No authentication token is sent. This means:
 - 60 requests/hour rate limit (vs 5,000 with authentication)
 - Private repositories are not listed
-- The Language.go module handles authentication differently (via curl with token)
 
-### 10. Silent Error Handling
+### 10. Concurrent Processing Risks
 
-Multiple operations discard errors silently:
+The tool processes up to 5 repositories concurrently via a goroutine pool:
+
+```go
+limit := make(chan struct{}, 5)
+```
+
+**Risks**:
+- Disk space contention — 5 simultaneous clones can consume significant disk space
+- Network bandwidth saturation — concurrent clones compete for bandwidth
+- npm install contention — multiple processes running `npm install` simultaneously
+- CPU/memory pressure — especially during npm dependency resolution
+
+### 11. Silent Error Handling
+
+Several operations still discard errors silently:
 
 | Operation | Error Handling | Consequence |
 |---|---|---|
-| `os.ReadDir` in `Folder()` | Error ignored | Traversal continues with empty lists |
+| `os.ReadDir` in `Segregator()` | Error ignored | Traversal continues with empty lists |
 | `filepath.WalkDir` callback | Error returned nil | Walk continues past problematic files |
 | `os.ReadFile` in import scan | Return nil | File is skipped without warning |
-| `os.ReadFile("package.json")` | Return | Directory is silently skipped |
-| `cmd.Run()` for clone | Return value not checked | Clone failures are invisible |
-| `cmd.Run()` for build | Return value not checked | Build failures are invisible |
-| `cmd.Run()` for git commit | Return value not checked | Commit failures are invisible |
-| `os.ReadDir(uiDir)` | Print error + return | Cleanup stops without alerting |
 
 ## Environmental Limitations
 
@@ -165,22 +178,12 @@ Multiple operations discard errors silently:
 
 | Resource | Minimum | Practical |
 |---|---|---|
-| Disk space | ~100MB per repository | 10GB+ recommended for batch processing |
+| Disk space | ~100MB per repository × up to 5 concurrent | 10GB+ recommended |
 | Memory | ~50MB | 256MB+ recommended |
 | Network bandwidth | 1Mbps | 10Mbps+ for reasonable clone times |
 | API rate limit | 60 req/hr (unauthenticated) | 5000 req/hr (authenticated) |
 
 ## Design Limitations
-
-### Single-Threaded Execution
-
-Repositories are processed sequentially. No goroutine-based parallelism is implemented. This was a deliberate design choice to:
-
-- Simplify error handling
-- Avoid resource contention during git operations
-- Ensure deterministic output ordering
-
-However, it means total execution time scales linearly with repository count.
 
 ### No State Persistence
 

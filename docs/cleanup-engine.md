@@ -7,17 +7,20 @@ The cleanup engine is the core subsystem responsible for **dead component detect
 ## Engine Entry Point
 
 ```
-CleanThis(folder string)
+CleanThis(filesAndFolder string, repo string, repoStart time.Time)
 ```
 
-**Invariant**: The `folder` parameter must point to a directory containing a `package.json` with both `react` and `react-dom` as dependencies.
+**Invariant**: The `filesAndFolder` parameter must point to a directory containing a `package.json` with both `react` and `react-dom` as dependencies.
 
 ## Detection Pipeline
 
 ### 1. Dependency Verification
 
 ```go
-content, err := os.ReadFile(filepath.Join(folder, "package.json"))
+content, err := os.ReadFile(filepath.Join(filesAndFolder, "package.json"))
+if err != nil {
+    return
+}
 pkg := string(content)
 if !strings.Contains(pkg, "react") || !strings.Contains(pkg, "react-dom") {
     return
@@ -34,7 +37,7 @@ The engine performs raw byte-level substring matching on `package.json`. This ap
 ### 2. UI Directory Location
 
 ```go
-func findUIDir(root string) (string, bool) {
+func FindUIDir(root string) (string, bool) {
     filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
         if found || err != nil || !d.IsDir() || filepath.Base(path) != "ui" {
             return nil
@@ -59,7 +62,10 @@ The directory walker uses `filepath.WalkDir` with a short-circuit mechanism. Onc
 ### 3. Static Import Analysis
 
 ```go
-filepath.WalkDir(folder, func(path string, d os.DirEntry, err error) error {
+used := map[string]bool{}
+exts := map[string]bool{".ts": true, ".tsx": true, ".js": true, ".jsx": true}
+
+filepath.WalkDir(filesAndFolder, func(path string, d os.DirEntry, err error) error {
     if err != nil || d.IsDir() { return nil }
     if !exts[filepath.Ext(path)] { return nil }
 
@@ -121,23 +127,38 @@ export * from './Button'
 
 ```go
 entries, err := os.ReadDir(uiDir)
+if err != nil {
+    logger.Error("failed_read_ui_dir",
+        slog.String("repo", repo),
+        slog.String("error", err.Error()),
+    )
+    util.MetricsRegistry.CleanupFailuresTotal.Inc()
+    return
+}
+
+deletedCount := 0
 for _, entry := range entries {
     name := entry.Name()
     base := strings.ToLower(strings.TrimSuffix(name, filepath.Ext(name)))
     if !used[base] {
         path := filepath.Join(uiDir, name)
         os.RemoveAll(path)
+        deletedCount++
     }
 }
+
+util.MetricsRegistry.FilesDeletedTotal.Add(float64(deletedCount))
 ```
 
 **Deletion logic**:
 
 1. Read all entries in the `components/ui` directory
-2. For each entry, strip the file extension to get the "stem"
-3. Lowercase the stem for case-insensitive comparison
-4. Check if the stem exists in the usage map
-5. If absent, execute `os.RemoveAll` (handles both files and directories)
+2. On error: log the failure, increment `CleanupFailuresTotal` metric, return early
+3. For each entry, strip the file extension to get the "stem"
+4. Lowercase the stem for case-insensitive comparison
+5. Check if the stem exists in the usage map
+6. If absent, execute `os.RemoveAll` (handles both files and directories)
+7. Track `deletedCount` and emit to Prometheus metric
 
 **Edge cases handled**:
 
@@ -154,30 +175,53 @@ for _, entry := range entries {
 ### 5. Build Validation
 
 ```go
+util.LogBuildStart(logger, repo)
+buildStart := time.Now()
 build := exec.Command("sh", "-c", "npm install --legacy-peer-deps && npm run build")
-build.Dir = folder
+build.Dir = filesAndFolder
 build.Stdout = os.Stdout
 build.Stderr = os.Stderr
-build.Run()
+buildErr := build.Run()
+buildDur := time.Since(buildStart)
+
+buildStatus := "success"
+if buildErr != nil {
+    buildStatus = "failed"
+    util.MetricsRegistry.BuildFailuresTotal.Inc()
+}
+util.LogBuildEnd(logger, repo, buildDur, buildStatus, buildErr)
+util.MetricsRegistry.BuildDurationSeconds.Observe(buildDur.Seconds())
 ```
 
 The build step serves as a **regression detection mechanism**. If a used component was incorrectly identified as unused:
 
 1. Build fails due to missing import
 2. Error output is visible in console
-3. The deletion is NOT reverted
-4. Processing continues to the next repository
+3. Build failure is logged with structured attributes (`build_status`, `duration`, `error`)
+4. `BuildFailuresTotal` metric is incremented
+5. The deletion is NOT reverted
+6. Processing continues to the next operation
 
-**Why errors are silent**: The `build.Run()` return value (`error`) is not checked. This design choice prioritizes throughput over safety. See [limitations.md](limitations.md) for discussion.
+**Note on error handling**: Unlike the earlier implementation that silently discarded the build error, the current code captures `buildErr` and uses it for logging and metrics. However, the build result still does not block the pipeline.
 
 ### 6. Git Commit
 
 ```go
+util.LogGitCommitStart(logger, repo)
+gitStart := time.Now()
 git := exec.Command("sh", "-c", "git cm 'auto: cleanup ui and build'")
-git.Dir = folder
+git.Dir = filesAndFolder
 git.Stdout = os.Stdout
 git.Stderr = os.Stderr
-git.Run()
+gitErr := git.Run()
+gitDur := time.Since(gitStart)
+
+if gitErr != nil {
+    util.LogGitCommitEnd(logger, repo, gitDur, gitErr)
+    util.MetricsRegistry.GitCommitFailuresTotal.Inc()
+} else {
+    util.LogGitCommitEnd(logger, repo, gitDur, nil)
+}
 ```
 
 **Commit behavior**:
@@ -185,18 +229,34 @@ git.Run()
 - Assumes `git cm` is a user-configured alias for `git commit -am`
 - The `-a` flag stages all tracked files that have been modified or deleted
 - Commit message is static: `auto: cleanup ui and build`
+- Git duration is measured and logged
+- On failure: `GitCommitFailuresTotal` metric is incremented
 - No push is performed
 - No tagged release is created
 - No branch management is performed
+
+### 7. Final Logging & Metrics
+
+```go
+totalDur := time.Since(repoStart)
+util.MetricsRegistry.RepoProcessingDuration.Observe(totalDur.Seconds())
+util.MetricsRegistry.ReposProcessedTotal.Inc()
+util.LogRepoComplete(logger, repo, totalDur, deletedCount, buildStatus)
+```
+
+Each repository's complete processing cycle is recorded:
+- Total processing duration (repo start to finish) emitted as Prometheus histogram
+- `ReposProcessedTotal` counter incremented
+- Structured log with repo name, total duration, files deleted count, and build status
 
 ## Engine Safety Characteristics
 
 | Aspect | Assessment |
 |---|---|
 | Deletion safety | No backup, no trash, no undo |
-| Build verification | Present but non-blocking |
+| Build verification | Present and measured, but non-blocking |
 | Git safety | Local commit only, no push |
-| Error recovery | Non-existent (failures are silent) |
+| Error recovery | Non-existent (failures are logged and metered) |
 | Dry-run support | Not implemented |
 | Rollback support | Not implemented |
 
@@ -204,11 +264,12 @@ git.Run()
 
 The engine has **zero configuration parameters**. All behavior is hardcoded:
 
-- GitHub username: hardcoded in `getRepos()` URL
+- GitHub username: hardcoded in `GetAllRepos()` URL
 - Repository limit: `?per_page=100`
 - Clone URL scheme: SSH only
+- Concurrency limit: 5 goroutines
 - Import regex pattern: hardcoded
-- File extensions: `{"ts", "tsx", "js", "jsx"}`
+- File extensions: `{".ts", ".tsx", ".js", ".jsx"}`
 - npm flags: `--legacy-peer-deps`
 - Commit message: `auto: cleanup ui and build`
 - Git alias dependency: `cm`
