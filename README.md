@@ -296,19 +296,6 @@ GitHub-Cleaner-Go/
 
 ---
 
-## Future Roadmap
-
-See [docs/roadmap.md](docs/roadmap.md) for the complete development roadmap, including:
-- AST-based parsing for 100% accurate import resolution
-- AI-assisted cleanup decisioning
-- Automated pull request generation
-- GitHub Actions CI/CD integration
-- Web dashboard for operation monitoring
-- Multi-language framework support
-- Distributed scanning architecture
-
----
-
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed contributor guidelines, including setup instructions, code style expectations, and pull request process.
