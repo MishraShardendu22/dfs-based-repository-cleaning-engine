@@ -1,3 +1,46 @@
-.env
-tmp
+# === Build Artifacts ===
+github-cleaner
+github-cleaner.exe
+*.out
+*.test
+*.test.exe
+
+# === Go ===
 go.sum
+
+# === Environment & Secrets ===
+.env
+.env.local
+.env.production
+*.pem
+*.key
+
+# === IDE & Editor ===
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# === Dependencies ===
+node_modules/
+jspm_packages/
+
+# === Build Output ===
+dist/
+build/
+.next/
+.cache/
+
+# === Logs ===
+*.log
+output.log
+
+# === Temp & Cache ===
+tmp/
+/tmp/
+temp/
+*.tmp
+.cache
