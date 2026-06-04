@@ -1,27 +1,45 @@
 package main
 
 import (
-	"fmt"
+	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/MishraShardendu22/util"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+var totalRepos int
 var wg sync.WaitGroup
+var logger *slog.Logger
+
 
 func main() {
+	logger = util.NewLogger()
+
+	// Start metrics HTTP server
+	go func() {
+		http.Handle("/metrics", promhttp.Handler())
+		slog.Info("metrics server starting on :2112")
+		if err := http.ListenAndServe(":2112", nil); err != nil {
+			slog.Error("metrics server failed", "error", err)
+		}
+	}()
+
 	username := "MishraShardendu22"
 	url := "https://api.github.com/users/" + username + "/repos?per_page=100"
 
 	repos := util.GetAllRepos(url)
+	totalRepos = len(repos)
 
-	// max 10 goroutines at a time
-	limit := make(chan struct{}, 10)
+	// max 5 goroutines at a time
+	limit := make(chan struct{}, 5)
 
 	for _, repo := range repos {
 		wg.Add(1)
@@ -37,6 +55,9 @@ func main() {
 				<-limit
 			}()
 
+			util.MetricsRegistry.ActiveWorkers.Inc()
+			defer util.MetricsRegistry.ActiveWorkers.Dec()
+
 			// clone and clean parallely
 			CloneAndClean(r)
 
@@ -44,13 +65,22 @@ func main() {
 	}
 
 	wg.Wait()
+
+	logger.Info("execution_summary",
+		slog.String("operation", "summary"),
+		slog.Int("total_repos", totalRepos),
+	)
 }
 
 func CloneAndClean(repo string) {
+	repoStart := time.Now()
 	repoPath := filepath.Join("_Repos", repo)
 
 	// clone using ssh - standard
 	repoURL := "git@github.com-project:MishraShardendu22/" + repo + ".git"
+
+	util.LogCloneStart(logger, repo)
+	cloneStart := time.Now()
 
 	cmd := exec.Command(
 		"git",
@@ -63,17 +93,26 @@ func CloneAndClean(repo string) {
 	cmd.Stderr = os.Stderr
 
 	err := cmd.Run()
+	cloneDur := time.Since(cloneStart)
+
 	if err != nil {
-		fmt.Println("Clone failed:", repo, err)
+		util.LogCloneEnd(logger, repo, cloneDur, err)
+		util.MetricsRegistry.CloneFailuresTotal.Inc()
+		util.LogFailure(logger, repo, "clone", err)
 		return
 	}
+	util.LogCloneEnd(logger, repo, cloneDur, nil)
+	util.MetricsRegistry.CloneDurationSeconds.Observe(cloneDur.Seconds())
 
 	// which repo is currently being cleaned
 	repoPath = filepath.Join("_Repos", repo)
 	absRepoPath, err := filepath.Abs(repoPath)
 
 	if err != nil {
-		fmt.Println("Failed to get absolute path:", err)
+		logger.Error("failed_get_absolute_path",
+			slog.String("repo", repo),
+			slog.String("error", err.Error()),
+		)
 		os.RemoveAll(repoPath)
 		return
 	}
@@ -82,30 +121,42 @@ func CloneAndClean(repo string) {
 		os.RemoveAll(absRepoPath)
 	}()
 
-	Cleaner(absRepoPath)
+	Cleaner(absRepoPath, repo, repoStart)
 }
 
-func Cleaner(staringRepo string) {
-	fmt.Println("Starting in:", staringRepo)
-	DeepSearchAndClean(staringRepo)
+func Cleaner(staringRepo string, repo string, repoStart time.Time) {
+	logger.Info("cleaner_start",
+		slog.String("repo", repo),
+		slog.String("path", staringRepo),
+	)
+	util.LogCleanupStart(logger, repo)
+	cleanupStart := time.Now()
+
+	func() {
+		defer func() {
+			cleanupDur := time.Since(cleanupStart)
+			util.LogCleanupEnd(logger, repo, cleanupDur, 0, nil)
+		}()
+		DeepSearchAndClean(staringRepo, repo, repoStart)
+	}()
 }
 
 // DFS call to clean the directory recursively
-func DeepSearchAndClean(currFolder string) {
+func DeepSearchAndClean(currFolder string, repo string, repoStart time.Time) {
 	dirs := util.Segregator(currFolder, true)
 	files := util.Segregator(currFolder, false)
 
 	if util.Contains(files, "package.json") {
-		CleanThis(currFolder)
+		CleanThis(currFolder, repo, repoStart)
 		return
 	}
 
 	for _, d := range dirs {
-		DeepSearchAndClean(filepath.Join(currFolder, d))
+		DeepSearchAndClean(filepath.Join(currFolder, d), repo, repoStart)
 	}
 }
 
-func CleanThis(filesAndFolder string) {
+func CleanThis(filesAndFolder string, repo string, repoStart time.Time) {
 	content, err := os.ReadFile(filepath.Join(filesAndFolder, "package.json"))
 	if err != nil {
 		return
@@ -116,11 +167,12 @@ func CleanThis(filesAndFolder string) {
 		return
 	}
 
+	util.MetricsRegistry.ReactReposTotal.Inc()
+
 	uiDir, ok := util.FindUIDir(filesAndFolder)
 	if !ok {
 		return
 	}
-	fmt.Println("Cleaning UI in:", uiDir)
 
 	used := map[string]bool{}
 	exts := map[string]bool{".ts": true, ".tsx": true, ".js": true, ".jsx": true}
@@ -144,28 +196,62 @@ func CleanThis(filesAndFolder string) {
 
 	entries, err := os.ReadDir(uiDir)
 	if err != nil {
-		fmt.Println("Failed to read ui directory:", err)
+		logger.Error("failed_read_ui_dir",
+			slog.String("repo", repo),
+			slog.String("error", err.Error()),
+		)
+		util.MetricsRegistry.CleanupFailuresTotal.Inc()
 		return
 	}
+
+	deletedCount := 0
 	for _, entry := range entries {
 		name := entry.Name()
 		base := strings.ToLower(strings.TrimSuffix(name, filepath.Ext(name)))
 		if !used[base] {
 			path := filepath.Join(uiDir, name)
-			fmt.Println("Deleting unused:", path)
 			os.RemoveAll(path)
+			deletedCount++
 		}
 	}
 
+	util.MetricsRegistry.FilesDeletedTotal.Add(float64(deletedCount))
+
+	util.LogBuildStart(logger, repo)
+	buildStart := time.Now()
 	build := exec.Command("sh", "-c", "npm install --legacy-peer-deps && npm run build")
 	build.Dir = filesAndFolder
 	build.Stdout = os.Stdout
 	build.Stderr = os.Stderr
-	build.Run()
+	buildErr := build.Run()
+	buildDur := time.Since(buildStart)
 
+	buildStatus := "success"
+	if buildErr != nil {
+		buildStatus = "failed"
+		util.MetricsRegistry.BuildFailuresTotal.Inc()
+	}
+	util.LogBuildEnd(logger, repo, buildDur, buildStatus, buildErr)
+	util.MetricsRegistry.BuildDurationSeconds.Observe(buildDur.Seconds())
+
+	util.LogGitCommitStart(logger, repo)
+	gitStart := time.Now()
 	git := exec.Command("sh", "-c", "git cm 'auto: cleanup ui and build'")
 	git.Dir = filesAndFolder
 	git.Stdout = os.Stdout
 	git.Stderr = os.Stderr
-	git.Run()
+	gitErr := git.Run()
+	gitDur := time.Since(gitStart)
+
+	if gitErr != nil {
+		util.LogGitCommitEnd(logger, repo, gitDur, gitErr)
+		util.MetricsRegistry.GitCommitFailuresTotal.Inc()
+	} else {
+		util.LogGitCommitEnd(logger, repo, gitDur, nil)
+	}
+
+	totalDur := time.Since(repoStart)
+	util.MetricsRegistry.RepoProcessingDuration.Observe(totalDur.Seconds())
+	util.MetricsRegistry.ReposProcessedTotal.Inc()
+	util.LogRepoComplete(logger, repo, totalDur, deletedCount, buildStatus)
 }
