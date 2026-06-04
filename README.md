@@ -2,7 +2,7 @@
 
 **Autonomous Repository Maintenance & Dead Component Elimination Engine**
 
-GitHub-Cleaner-Go is a production-grade automation tool that systematically traverses GitHub repositories, performs static import analysis on React codebases, identifies and removes unused UI components, validates builds post-cleanup, and commits the results — all without human intervention.
+GitHub-Cleaner-Go is a production-grade automation tool that systematically traverses GitHub repositories, performs static import analysis on React codebases, identifies and removes unused UI components, validates builds post-cleanup, and commits the results all without human intervention.
 
 Built for developers managing large React ecosystems where component bloat accumulates across repositories. The tool functions as an autonomous maintenance agent, reducing technical debt through programmatic dead-code elimination.
 
@@ -34,16 +34,16 @@ The system operates as a three-stage pipeline: **repository orchestration** → 
 
 ## Core Features
 
-- **Autonomous Repository Discovery** — Fetches all repositories from a GitHub account via the REST API (up to 100 repos per request)
-- **Concurrent Processing** — Processes up to 5 repositories simultaneously using goroutines with channel-based semaphore limiting
-- **Recursive Filesystem Traversal** — Walks directory trees (DFS) to locate React projects with `components/ui` directory structures
-- **Regex-Based Static Import Analysis** — Scans `.ts`, `.tsx`, `.js`, `.jsx` files for import statements referencing `components/ui/*` components
-- **Dead Component Elimination** — Compares used components against filesystem entries; removes orphaned components
-- **Build Validation** — Executes `npm install --legacy-peer-deps && npm run build` to verify post-cleanup integrity
-- **Prometheus Metrics** — Exposes real-time metrics including active workers, repos processed, clone/build durations, files deleted, and failure counters
-- **Structured JSON Logging** — All operations logged with `slog` in JSON format with consistent attribute structure
-- **Git Automation** — Automatically commits cleanup changes with standardized commit messages
-- **Ephemeral Repository Lifecycle** — Clones, processes, and destroys local repository copies — leaving no residual artifacts
+- **Autonomous Repository Discovery** Fetches all repositories from a GitHub account via the REST API (up to 100 repos per request)
+- **Concurrent Processing** Processes up to 5 repositories simultaneously using goroutines with channel-based semaphore limiting
+- **Recursive Filesystem Traversal** Walks directory trees (DFS) to locate React projects with `components/ui` directory structures
+- **Regex-Based Static Import Analysis** Scans `.ts`, `.tsx`, `.js`, `.jsx` files for import statements referencing `components/ui/*` components
+- **Dead Component Elimination** Compares used components against filesystem entries; removes orphaned components
+- **Build Validation** Executes `npm install --legacy-peer-deps && npm run build` to verify post-cleanup integrity
+- **Prometheus Metrics** Exposes real-time metrics including active workers, repos processed, clone/build durations, files deleted, and failure counters
+- **Structured JSON Logging** All operations logged with `slog` in JSON format with consistent attribute structure
+- **Git Automation** Automatically commits cleanup changes with standardized commit messages
+- **Ephemeral Repository Lifecycle** Clones, processes, and destroys local repository copies leaving no residual artifacts
 
 ---
 
@@ -51,27 +51,27 @@ The system operates as a three-stage pipeline: **repository orchestration** → 
 
 ### Stage 1: Repository Orchestration
 
-1. **GitHub API Discovery** — Issues `GET /users/{username}/repos?per_page=100` to enumerate all repositories (unauthenticated, 60 req/hr limit)
-2. **Concurrent Clone Pool** — Up to 5 repositories cloned simultaneously via goroutine pool with channel-based capacity control
-3. **SSH Clone** — Clones each repository via `git@github.com:{username}/{repo}.git`
-4. **Absolute Path Resolution** — Uses `filepath.Abs` to resolve the cloned repository root (no `os.Chdir` state mutation)
-5. **Recursive Scanner Invocation** — Initiates `DeepSearchAndClean()` on the repository root
+1. **GitHub API Discovery** Issues `GET /users/{username}/repos?per_page=100` to enumerate all repositories (unauthenticated, 60 req/hr limit)
+2. **Concurrent Clone Pool** Up to 5 repositories cloned simultaneously via goroutine pool with channel-based capacity control
+3. **SSH Clone** Clones each repository via `git@github.com:{username}/{repo}.git`
+4. **Absolute Path Resolution** Uses `filepath.Abs` to resolve the cloned repository root (no `os.Chdir` state mutation)
+5. **Recursive Scanner Invocation** Initiates `DeepSearchAndClean()` on the repository root
 
 ### Stage 2: Static Analysis & Cleanup Pipeline
 
-1. **Filesystem Enumeration** — Lists files and directories at current level via `Segregator()` (separates files from directories)
-2. **React Project Detection** — Checks for `package.json` containing both `react` and `react-dom` dependencies
-3. **UI Directory Discovery** — DFS walk via `FindUIDir()` to locate `components/ui` directories
-4. **Source Graph Analysis** — Walks every `.ts/.tsx/.js/.jsx` file, extracting import paths matching the pattern:
+1. **Filesystem Enumeration** Lists files and directories at current level via `Segregator()` (separates files from directories)
+2. **React Project Detection** Checks for `package.json` containing both `react` and `react-dom` dependencies
+3. **UI Directory Discovery** DFS walk via `FindUIDir()` to locate `components/ui` directories
+4. **Source Graph Analysis** Walks every `.ts/.tsx/.js/.jsx` file, extracting import paths matching the pattern:
    - `[./@"]components/ui/([A-Za-z0-9_-]+)`
-5. **Usage Mapping** — Builds a lowercase-normalized set of used component names
-6. **Dead Component Elimination** — Iterates over `components/ui` entries, deleting any file whose base name (without extension) has zero import references
-7. **Build Verification** — Runs the project build to confirm no regressions were introduced; build exit code is captured and logged
+5. **Usage Mapping** Builds a lowercase-normalized set of used component names
+6. **Dead Component Elimination** Iterates over `components/ui` entries, deleting any file whose base name (without extension) has zero import references
+7. **Build Verification** Runs the project build to confirm no regressions were introduced; build exit code is captured and logged
 
 ### Stage 3: Commit & Cleanup
 
-1. **Git Commit** — Stages and commits all changes with message: `auto: cleanup ui and build` (requires `git cm` alias for `commit -am`)
-2. **Repository Destruction** — Recursively removes the cloned repository via deferred `os.RemoveAll` on absolute path
+1. **Git Commit** Stages and commits all changes with message: `auto: cleanup ui and build` (requires `git cm` alias for `commit -am`)
+2. **Repository Destruction** Recursively removes the cloned repository via deferred `os.RemoveAll` on absolute path
 
 ---
 
@@ -133,7 +133,7 @@ Matches import statements in the following common patterns:
 | String import | `"components/ui/Modal"` |
 | Named import | `components/ui/Button` |
 
-The analysis builds a **usage map** (boolean, presence-based) by lowercasing the captured component name. Files are then compared against this map — any file in `components/ui` whose stem does not appear in the usage set is considered dead and scheduled for deletion.
+The analysis builds a **usage map** (boolean, presence-based) by lowercasing the captured component name. Files are then compared against this map any file in `components/ui` whose stem does not appear in the usage set is considered dead and scheduled for deletion.
 
 **Known Limitation**: Dynamic imports using template literals or computed strings are not resolved. The analysis also does not handle re-exports or barrel files.
 
@@ -148,8 +148,8 @@ npm install --legacy-peer-deps && npm run build
 ```
 
 This serves dual purposes:
-1. **Integrity Check** — Verifies that no deleted component was actually required at build time (catches false positives)
-2. **Dependency Resolution** — Ensures the project is in a buildable state after modifications
+1. **Integrity Check** Verifies that no deleted component was actually required at build time (catches false positives)
+2. **Dependency Resolution** Ensures the project is in a buildable state after modifications
 
 Build results are logged with duration and status. Build failures are tracked via Prometheus metrics but do not halt the pipeline.
 
@@ -274,14 +274,14 @@ GitHub-Cleaner-Go/
 
 ## Technical Limitations
 
-- **Regex-based analysis** — Cannot resolve dynamic imports, computed paths, or re-exports. May produce false negatives for obfuscated import patterns
-- **React-only scope** — Currently limited to React projects with `components/ui` structures. No support for Vue, Angular, or other frameworks
-- **SSH-only authentication** — Requires configured SSH keys for repository cloning. No HTTPS fallback
-- **Single-user mode** — Hardcoded to a single GitHub username. No multi-account or organization support
-- **No dry-run mode** — Operations are destructive by design. No preview capability for what would be deleted
-- **Git alias dependency** — Requires `git cm` alias for `git commit -am`
-- **No API pagination** — Only fetches the first 100 repos from the GitHub API
-- **No directory exclusion** — Traverses `.git`, `node_modules`, and hidden directories
+- **Regex-based analysis** Cannot resolve dynamic imports, computed paths, or re-exports. May produce false negatives for obfuscated import patterns
+- **React-only scope** Currently limited to React projects with `components/ui` structures. No support for Vue, Angular, or other frameworks
+- **SSH-only authentication** Requires configured SSH keys for repository cloning. No HTTPS fallback
+- **Single-user mode** Hardcoded to a single GitHub username. No multi-account or organization support
+- **No dry-run mode** Operations are destructive by design. No preview capability for what would be deleted
+- **Git alias dependency** Requires `git cm` alias for `git commit -am`
+- **No API pagination** Only fetches the first 100 repos from the GitHub API
+- **No directory exclusion** Traverses `.git`, `node_modules`, and hidden directories
 
 ---
 
