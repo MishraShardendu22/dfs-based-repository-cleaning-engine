@@ -47,9 +47,18 @@ func main() {
 }
 
 func CloneAndClean(repo string) {
+	repoPath := filepath.Join("_Repos", repo)
+
 	// clone using ssh - standard
 	repoURL := "git@github.com-project:MishraShardendu22/" + repo + ".git"
-	cmd := exec.Command("git", "clone", repoURL)
+
+	cmd := exec.Command(
+		"git",
+		"clone",
+		repoURL,
+		repoPath,
+	)
+
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -60,18 +69,20 @@ func CloneAndClean(repo string) {
 	}
 
 	// which repo is currently being cleaned
-	repoPath, err := filepath.Abs(repo)
+	repoPath = filepath.Join("_Repos", repo)
+	absRepoPath, err := filepath.Abs(repoPath)
+
 	if err != nil {
 		fmt.Println("Failed to get absolute path:", err)
-		os.RemoveAll(repo)
+		os.RemoveAll(repoPath)
 		return
 	}
 
 	defer func() {
-		os.RemoveAll(repoPath)
+		os.RemoveAll(absRepoPath)
 	}()
 
-	Cleaner(repoPath)
+	Cleaner(absRepoPath)
 }
 
 func Cleaner(staringRepo string) {
@@ -81,23 +92,8 @@ func Cleaner(staringRepo string) {
 
 // DFS call to clean the directory recursively
 func DeepSearchAndClean(currFolder string) {
-	var dirs []string
-	var files []string
-
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	go func() {
-		defer wg.Done()
-		dirs = util.Segregator(currFolder, true)
-	}()
-
-	go func() {
-		defer wg.Done()
-		files = util.Segregator(currFolder, false)
-	}()
-
-	wg.Wait()
+	dirs := util.Segregator(currFolder, true)
+	files := util.Segregator(currFolder, false)
 
 	if util.Contains(files, "package.json") {
 		CleanThis(currFolder)
