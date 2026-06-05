@@ -2,9 +2,9 @@
 
 ## Supported Versions
 
-| Version | Supported |
-|---|---|
-| Current (HEAD) | ✅ Active development |
+| Version       | Supported          |
+|---------------|--------------------|
+| Current (HEAD)| Active development |
 
 Security updates are applied to the latest commit on the `main` branch. There are no versioned releases at this time.
 
