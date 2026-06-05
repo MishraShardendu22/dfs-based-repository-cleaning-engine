@@ -1,4 +1,4 @@
-# GitHub-Cleaner-Go
+# Repository Cleaninge Engine
 
 Autonomous Repository Maintenance and Dead Component Elimination Engine.
 
@@ -320,7 +320,7 @@ The MIT License was chosen for this project because:
 **MishraShardendu22**
 
 - GitHub: [@MishraShardendu22](https://github.com/MishraShardendu22)
-- Project: [GitHub-Cleaner-Go](https://github.com/MishraShardendu22/GitHub-Cleaner-Go)
+- Project: [Repository-cleaning-engine](https://github.com/MishraShardendu22/Repository-cleaning-engine)
 
 ---
 
