@@ -24,6 +24,7 @@ var logger *slog.Logger
 
 
 func main() {
+	timeNow := time.Now()
 	logger = util.NewLogger()
 
 	// Start metrics HTTP server
@@ -41,8 +42,8 @@ func main() {
 	repos := util.GetAllRepos(url)
 	totalRepos = len(repos)
 
-	// max 5 goroutines at a time
-	limit := make(chan struct{}, 5)
+	// max 10 goroutines at a time
+	limit := make(chan struct{}, 10)
 
 	for _, repo := range repos {
 		wg.Add(1)
@@ -69,11 +70,13 @@ func main() {
 
 	wg.Wait()
 
+	totalDur := time.Since(timeNow)
 	logger.Info("execution_summary",
 		slog.String("operation", "summary"),
 		slog.Int("total_repos", totalRepos),
+		slog.String("total_duration", totalDur.String()),
 	)
-
+	
 	logger.Info("All repos processed. Keeping metrics server alive. Press Ctrl+C to exit.")
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)

@@ -6,6 +6,11 @@ GitHub-Cleaner-Go is a production-grade automation tool that systematically trav
 
 Built for developers managing large React ecosystems where component bloat accumulates across repositories. The tool functions as an autonomous maintenance agent, reducing technical debt through programmatic dead-code elimination.
 
+## Latest Check
+- Runtime: 16m 1.22s
+- Concurrency: 10 workers
+- Repositories scanned: 148
+
 ---
 
 ## Architecture
