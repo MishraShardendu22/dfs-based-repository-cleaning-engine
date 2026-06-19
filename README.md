@@ -1,4 +1,4 @@
-# Repository Cleaninge Engine
+# DFS based repository cleaninge engine
 
 Autonomous Repository Maintenance and Dead Component Elimination Engine.
 
