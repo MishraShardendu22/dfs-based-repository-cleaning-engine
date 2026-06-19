@@ -1,14 +1,17 @@
 package main
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/MishraShardendu22/util"
@@ -70,6 +73,12 @@ func main() {
 		slog.String("operation", "summary"),
 		slog.Int("total_repos", totalRepos),
 	)
+
+	logger.Info("All repos processed. Keeping metrics server alive. Press Ctrl+C to exit.")
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	<-c
+	logger.Info("Exiting.")
 }
 
 func CloneAndClean(repo string) {
@@ -151,7 +160,6 @@ func DeepSearchAndClean(currFolder string, repo string, repoStart time.Time) {
 
 	if util.Contains(files, "package.json") {
 		CleanThis(currFolder, repo, repoStart)
-		return
 	}
 
 	for _, d := range dirs {
@@ -232,7 +240,23 @@ func CleanThis(filesAndFolder string, repo string, repoStart time.Time) {
 
 	util.LogBuildStart(logger, repo)
 	buildStart := time.Now()
-	build := exec.Command("sh", "-c", "npm install --legacy-peer-deps && npm run build")
+
+	pmInstall := "npm install --legacy-peer-deps"
+	pmBuild := "npm run build"
+	folderFiles := util.Segregator(filesAndFolder, false)
+	if util.Contains(folderFiles, "yarn.lock") {
+		pmInstall = "yarn install"
+		pmBuild = "yarn build"
+	} else if util.Contains(folderFiles, "pnpm-lock.yaml") {
+		pmInstall = "pnpm install"
+		pmBuild = "pnpm run build"
+	} else if util.Contains(folderFiles, "bun.lockb") {
+		pmInstall = "bun install"
+		pmBuild = "bun run build"
+	}
+
+	buildCmdStr := fmt.Sprintf("%s && %s", pmInstall, pmBuild)
+	build := exec.Command("sh", "-c", buildCmdStr)
 	build.Dir = filesAndFolder
 	build.Stdout = os.Stdout
 	build.Stderr = os.Stderr
@@ -247,20 +271,22 @@ func CleanThis(filesAndFolder string, repo string, repoStart time.Time) {
 	util.LogBuildEnd(logger, repo, buildDur, buildStatus, buildErr)
 	util.MetricsRegistry.BuildDurationSeconds.Observe(buildDur.Seconds())
 
-	util.LogGitCommitStart(logger, repo)
-	gitStart := time.Now()
-	git := exec.Command("sh", "-c", "git cm 'auto: cleanup ui and build'")
-	git.Dir = filesAndFolder
-	git.Stdout = os.Stdout
-	git.Stderr = os.Stderr
-	gitErr := git.Run()
-	gitDur := time.Since(gitStart)
+	if deletedCount > 0 && buildStatus == "success" {
+		util.LogGitCommitStart(logger, repo)
+		gitStart := time.Now()
+		git := exec.Command("sh", "-c", "git add . && git cm 'auto: cleanup ui and build'")
+		git.Dir = filesAndFolder
+		git.Stdout = os.Stdout
+		git.Stderr = os.Stderr
+		gitErr := git.Run()
+		gitDur := time.Since(gitStart)
 
-	if gitErr != nil {
-		util.LogGitCommitEnd(logger, repo, gitDur, gitErr)
-		util.MetricsRegistry.GitCommitFailuresTotal.Inc()
-	} else {
-		util.LogGitCommitEnd(logger, repo, gitDur, nil)
+		if gitErr != nil {
+			util.LogGitCommitEnd(logger, repo, gitDur, gitErr)
+			util.MetricsRegistry.GitCommitFailuresTotal.Inc()
+		} else {
+			util.LogGitCommitEnd(logger, repo, gitDur, nil)
+		}
 	}
 
 	totalDur := time.Since(repoStart)
