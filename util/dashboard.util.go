@@ -116,45 +116,56 @@ const dashboardHTML = `<!DOCTYPE html>
       display: flex;
       flex-direction: column;
       gap: 6px;
+      animation: cardEntrance 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+      transition: transform 0.2s ease, border-color 0.2s ease;
     }
-    .stat-label {
-      font-size: 11px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      color: var(--text-muted);
+
+    .stat-card:hover {
+      transform: translateY(-2px);
+      border-color: var(--border-focus);
     }
-    .stat-value {
-      font-family: var(--font-mono);
-      font-size: 28px;
-      font-weight: 700;
-      color: var(--text-primary);
+
+    .stat-card:nth-child(1) { animation-delay: 0.05s; }
+    .stat-card:nth-child(2) { animation-delay: 0.10s; }
+    .stat-card:nth-child(3) { animation-delay: 0.15s; }
+    .stat-card:nth-child(4) { animation-delay: 0.20s; }
+
+    @keyframes cardEntrance {
+      from {
+        opacity: 0;
+        transform: translateY(16px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
     }
-    .card-panel {
-      background: var(--bg-raised);
-      border: 1px solid var(--border-default);
-      border-radius: var(--radius-lg);
-      padding: 24px;
+
+    @keyframes pulseSync {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.5; transform: scale(1.1); }
     }
-    .panel-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 20px;
+
+    .sync-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      background: var(--success);
+      border-radius: 50%;
+      margin-right: 6px;
+      animation: pulseSync 2s infinite ease-in-out;
     }
-    .panel-title { font-size: 16px; font-weight: 600; }
-    .metrics-raw {
-      width: 100%;
-      height: 320px;
-      background: var(--bg-base);
-      border: 1px solid var(--border-default);
-      border-radius: var(--radius-sm);
-      padding: 16px;
-      color: #34d399;
-      font-family: var(--font-mono);
-      font-size: 12px;
-      overflow: auto;
-      white-space: pre-wrap;
+
+    .nav-btn:active {
+      transform: scale(0.98);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .stat-card, .sync-dot {
+        animation: none !important;
+        transition: none !important;
+        transform: none !important;
+      }
     }
   </style>
 </head>
@@ -192,33 +203,46 @@ const dashboardHTML = `<!DOCTYPE html>
     <div class="card-panel">
       <div class="panel-header">
         <h2 class="panel-title">Live Telemetry Inspector (/metrics)</h2>
-        <span id="poll-status" style="font-size:12px; color:var(--text-muted); font-family:var(--font-mono);">Polling active</span>
+        <span id="poll-status" style="font-size:12px; color:var(--text-muted); font-family:var(--font-mono);"><span class="sync-dot"></span>Polling active</span>
       </div>
       <pre id="metrics-output" class="metrics-raw">Fetching live telemetry data from Go runtime...</pre>
     </div>
   </main>
 
   <script>
+    function updateVal(id, val) {
+      const el = document.getElementById(id);
+      if (el && el.textContent !== val) {
+        el.style.transition = 'transform 0.15s ease, opacity 0.15s ease';
+        el.style.opacity = '0.4';
+        el.style.transform = 'scale(0.95)';
+        setTimeout(() => {
+          el.textContent = val;
+          el.style.opacity = '1';
+          el.style.transform = 'scale(1)';
+        }, 150);
+      }
+    }
+
     async function fetchMetrics() {
       try {
         const res = await fetch('/metrics');
         const text = await res.text();
         document.getElementById('metrics-output').textContent = text;
         
-        // Parse simple metrics
         const workersMatch = text.match(/active_workers\s+(\d+)/);
-        if (workersMatch) document.getElementById('val-workers').textContent = workersMatch[1];
+        if (workersMatch) updateVal('val-workers', workersMatch[1]);
         
         const reposMatch = text.match(/react_repos_total\s+(\d+)/);
-        if (reposMatch) document.getElementById('val-repos').textContent = reposMatch[1];
+        if (reposMatch) updateVal('val-repos', reposMatch[1]);
 
         const deletedMatch = text.match(/files_deleted_total\s+(\d+)/);
-        if (deletedMatch) document.getElementById('val-deleted').textContent = deletedMatch[1];
+        if (deletedMatch) updateVal('val-deleted', deletedMatch[1]);
 
         const failuresMatch = text.match(/build_failures_total\s+(\d+)/);
-        if (failuresMatch) document.getElementById('val-failures').textContent = failuresMatch[1];
+        if (failuresMatch) updateVal('val-failures', failuresMatch[1]);
 
-        document.getElementById('poll-status').textContent = 'Last sync: ' + new Date().toLocaleTimeString();
+        document.getElementById('poll-status').innerHTML = '<span class="sync-dot"></span>Last sync: ' + new Date().toLocaleTimeString();
       } catch (err) {
         document.getElementById('poll-status').textContent = 'Sync error: ' + err.message;
       }
