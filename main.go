@@ -29,6 +29,7 @@ func main() {
 
 	// Start metrics HTTP server
 	go func() {
+		http.HandleFunc("/", util.ServeDashboard)
 		http.Handle("/metrics", promhttp.Handler())
 		slog.Info("metrics server starting on :2112")
 		if err := http.ListenAndServe(":2112", nil); err != nil {
